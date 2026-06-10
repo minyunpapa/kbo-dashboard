@@ -24,8 +24,10 @@ import re
 import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
+
+KST = timezone(timedelta(hours=9))
 
 API = "https://api-gw.sports.naver.com"
 HEADERS = {
@@ -420,7 +422,7 @@ def main():
     ssg = compute_ssg(league["finals"], details)
 
     print("[5/6] upcoming previews (선발/라인업)...")
-    today = date.today().isoformat()
+    today = datetime.now(KST).date().isoformat()   # Actions 러너(UTC)에서도 KST 기준
     upcoming = sorted([g for g in games if g["status"] in ("READY", "BEFORE")
                        and SSG in (g["hc"], g["ac"]) and g["date"] >= today],
                       key=lambda g: g["dt"] or g["date"])[:3]
@@ -443,7 +445,7 @@ def main():
 
     me = next((s for s in league["standings"] if s["team"] == ssg["name"]), {})
     data = {
-        "updated": datetime.now().strftime("%Y-%m-%d %H:%M KST"),
+        "updated": datetime.now(KST).strftime("%Y-%m-%d %H:%M KST"),
         "season": YEAR, "opening": opening, "ssg_team": ssg["name"],
         "standings": league["standings"],
         "rank_history": league["rank_history"],

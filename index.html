@@ -116,6 +116,21 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
 .lu-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .kv { font-size:13px; line-height:1.8; }
 .kv b { font-weight:800; }
+.board-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.board { border:1px solid var(--border); border-radius:12px; padding:12px; }
+.board .bt { font-size:12.5px; font-weight:800; color:var(--text-2); margin-bottom:8px; }
+.board ol { list-style:none; }
+.board li { display:flex; justify-content:space-between; font-size:12.5px;
+            padding:3.5px 0; border-bottom:1px solid #f6f8fa; }
+.board li:last-child { border-bottom:none; }
+.board li .nm { font-weight:600; }
+.board li .nm small { color:var(--muted); font-weight:500; }
+.board li .vl { font-weight:800; }
+.board li.ssg .nm, .board li.ssg .vl { color:var(--ssg); }
+.board li .rk { color:var(--muted); width:18px; display:inline-block; font-weight:600; }
+.entry-badge { display:inline-block; font-size:9px; font-weight:800; padding:1px 5px;
+               border-radius:6px; background:var(--ssg-bg); color:var(--ssg);
+               vertical-align:1.5px; margin-left:4px; }
 
 @media (max-width:760px) {
   .hero { grid-template-columns:repeat(3,1fr); }
@@ -125,6 +140,7 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
   .mon-grid { grid-template-columns:repeat(2,1fr); }
   .statgrid { grid-template-columns:repeat(4,1fr); }
   .lu-grid { grid-template-columns:1fr; }
+  .board-grid { grid-template-columns:1fr; }
   body { padding:10px; }
 }
 </style>
@@ -140,6 +156,7 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
     <button class="tab active" data-page="overview">개요</button>
     <button class="tab" data-page="games">일정·결과</button>
     <button class="tab" data-page="players">선수단</button>
+    <button class="tab" data-page="league">리그 리더보드</button>
   </div>
 
   <!-- ───────── 개요 ───────── -->
@@ -192,13 +209,34 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
 
   <!-- ───────── 선수단 ───────── -->
   <div class="page" id="page-players">
-    <div class="card">
-      <h2>🏏 타자 <span class="muted">(열 제목 클릭 = 정렬 · 행 클릭 = 선수 상세 · 타율 정렬 시 50타수 미만은 하단)</span></h2>
+    <div class="card" id="roster-card" style="display:none"></div>
+    <div class="card mt">
+      <h2>🏏 타자 <span class="muted">(열 제목 클릭 = 정렬 · 행 클릭 = 선수 상세 · 비율 정렬 시 규정 미달은 하단)</span></h2>
       <div class="log-wrap"><table id="batters"></table></div>
     </div>
     <div class="card mt">
       <h2>🥎 투수 <span class="muted">(열 제목 클릭 = 정렬 · 행 클릭 = 선수 상세)</span></h2>
       <div class="log-wrap"><table id="pitchers"></table></div>
+    </div>
+    <div class="muted" style="margin:10px 4px">
+      ⚠️ OBP·OPS·OPS+·BABIP·BB%·K%는 사구(HBP)·희생타가 공개 API에 없어 <b>약식</b>으로 계산됩니다.
+      2루타·3루타는 경기 기록 공시 파싱, FIP 상수는 리그 전체 합산으로 산출. OPS+는 파크팩터 미적용 (100 = 리그 평균).
+    </div>
+  </div>
+
+  <!-- ───────── 리그 리더보드 ───────── -->
+  <div class="page" id="page-league">
+    <div class="card">
+      <h2>🏆 타자 부문 <span class="muted" id="lg-note-bat"></span></h2>
+      <div class="board-grid" id="boards-bat"></div>
+    </div>
+    <div class="card mt">
+      <h2>🏆 투수 부문 <span class="muted" id="lg-note-pit"></span></h2>
+      <div class="board-grid" id="boards-pit"></div>
+    </div>
+    <div class="muted" style="margin:10px 4px">
+      규정: 타자 = 약식 타석 ≥ 팀경기 × 2.8 (타율·OPS·OPS+) / 투수 = 규정이닝 팀경기 × 1 (ERA·FIP).
+      OPS·OPS+는 사구·희생타 미포함 약식. SSG 선수는 <span style="color:var(--ssg);font-weight:700">빨간색</span>.
     </div>
   </div>
 
@@ -436,7 +474,7 @@ window.openGame = i => {
 
 /* ── 선수단 ── */
 const num = v => parseFloat(String(v ?? '').replace(/[^\d.\-]/g, '')) || 0;
-const RATE_KEYS = new Set(['avg', 'era', 'whip']);
+const RATE_KEYS = new Set(['avg', 'era', 'whip', 'ops', 'opsp', 'obp', 'slg', 'fip', 'bbp', 'kp']);
 function renderSortable(elId, cols, rows, rowHtml, qualFn, defaultKey, asc) {
   const el = document.getElementById(elId);
   let sortKey = defaultKey, sortAsc = asc;
@@ -461,47 +499,68 @@ function renderSortable(elId, cols, rows, rowHtml, qualFn, defaultKey, asc) {
   draw();
 }
 
+/* ── 1군 엔트리 (로스터) ── */
+const rosterSet = new Set();
+if (D.roster) {
+  const R = D.roster;
+  [...(R.lineup||[]), ...(R.candidates||[]).map(p=>p.name), ...(R.bullpen||[]).map(p=>p.name)]
+    .forEach(n => n && rosterSet.add(n));
+  const card = document.getElementById('roster-card');
+  card.style.display = 'block';
+  card.innerHTML = `
+    <h2>📋 1군 엔트리 — ${R.date} 기준${R.stale ? ' <span class="muted">(최근 확인분)</span>' : ''}</h2>
+    ${R.lineup?.length ? `<div class="kv"><b>라인업</b> &nbsp;${R.lineup.map(esc).join(' · ')}</div>` : ''}
+    ${R.candidates?.length ? `<div class="kv"><b>벤치 (${R.candidates.length})</b> &nbsp;${R.candidates.map(p=>esc(p.name)).join(' · ')}</div>` : ''}
+    ${R.bullpen?.length ? `<div class="kv"><b>투수 (${R.bullpen.length})</b> &nbsp;${R.bullpen.map(p=>esc(p.name)).join(' · ')}</div>` : ''}
+    <div class="muted" style="margin-top:8px">경기 프리뷰 엔트리 기준 — 등록/말소는 매 경기일 자동 반영. 명단의 선수는 표에 <span class="entry-badge">1군</span> 표시</div>`;
+}
+const entryBadge = n => rosterSet.has(n) ? '<span class="entry-badge">1군</span>' : '';
+const r3 = v => v == null ? '-' :
+  (typeof v === 'number' ? v.toFixed(3) : String(v)).replace(/^0\./, '.');
+
+/* ── 선수단 테이블 ── */
 const bats = D.ssg.batters || [];
 renderSortable('batters',
-  [['avg','타율'],['name','이름'],['g','G'],['ab','타수'],['hit','안타'],['hr','HR'],
-   ['rbi','타점'],['run','득점'],['sb','도루'],['bb','4구'],['kk','삼진']],
+  [['avg','타율'],['ops','OPS'],['opsp','OPS+'],['name','이름'],['g','G'],['hit','안타'],
+   ['hr','HR'],['rbi','타점'],['sb','도루'],['bbp','BB%'],['kp','K%']],
   bats,
   (b) => `<tr class="clickable" onclick="openBatter(${bats.indexOf(b)})">
-    <td style="font-weight:800">${esc(b.avg)}</td>
-    <td style="font-weight:700;text-align:left">${esc(b.name)} <span class="muted">${esc(b.pos||'')}</span></td>
-    <td>${b.g}</td><td>${b.ab}</td><td>${b.hit}</td><td>${b.hr}</td><td>${b.rbi}</td>
-    <td>${b.run}</td><td>${b.sb}</td><td>${b.bb}</td><td>${b.kk}</td></tr>`,
-  b => (b.ab >= 50 ? 1 : 0), 'avg', false);
+    <td style="font-weight:800">${r3(b.avg)}</td>
+    <td>${r3(b.ops)}</td>
+    <td style="font-weight:700">${b.opsp ?? '-'}</td>
+    <td style="font-weight:700;text-align:left">${esc(b.name)} <span class="muted">${esc(b.pos||'')}</span>${entryBadge(b.name)}</td>
+    <td>${b.g}</td><td>${b.hit}</td><td>${b.hr}</td><td>${b.rbi}</td>
+    <td>${b.sb}</td><td>${b.bbp ?? '-'}</td><td>${b.kp ?? '-'}</td></tr>`,
+  b => (b.qualified ? 1 : 0), 'opsp', false);
 
 const pits = D.ssg.pitchers || [];
 renderSortable('pitchers',
-  [['era','ERA'],['name','이름'],['g','G'],['w','승'],['l','패'],['sv','세'],['hld','홀'],
-   ['outs','이닝'],['kk','K'],['whip','WHIP']],
+  [['era','ERA'],['fip','FIP'],['whip','WHIP'],['name','이름'],['g','G'],['w','승'],['l','패'],
+   ['sv','세'],['hld','홀'],['outs','이닝'],['kk','K']],
   pits,
   (p) => `<tr class="clickable" onclick="openPitcher(${pits.indexOf(p)})">
     <td style="font-weight:800">${esc(p.era)}</td>
-    <td style="font-weight:700;text-align:left">${esc(p.name)}</td>
+    <td>${p.fip ?? '-'}</td><td>${p.whip ?? '-'}</td>
+    <td style="font-weight:700;text-align:left">${esc(p.name)}${entryBadge(p.name)}</td>
     <td>${p.g}</td><td>${p.w}</td><td>${p.l}</td><td>${p.sv}</td><td>${p.hld}</td>
-    <td>${esc(p.ip)}</td><td>${p.kk}</td><td>${esc(p.whip)}</td></tr>`,
-  p => (p.outs >= 60 ? 1 : 0), 'era', true);
+    <td>${esc(p.ip)}</td><td>${p.kk}</td></tr>`,
+  p => (p.qualified ? 1 : 0), 'era', true);
 
+const sg = (k, v) => `<div class="sg"><div class="k">${k}</div><div class="v">${v}</div></div>`;
 window.openBatter = i => {
   const b = bats[i];
   openModal(`
-    <h3>${esc(b.name)} <span class="muted">${esc(b.pos||'')} · 타자</span></h3>
-    <div class="sub">SSG 경기 박스스코어 합산 (${b.g}경기 출장)</div>
+    <h3>${esc(b.name)} <span class="muted">${esc(b.pos||'')} · 타자</span>${entryBadge(b.name)}</h3>
+    <div class="sub">${b.g}경기 · ${b.pa}타석(약식) · 시즌 전 경기 박스스코어 합산</div>
     <div class="statgrid">
-      <div class="sg"><div class="k">타율</div><div class="v">${esc(b.avg)}</div></div>
-      <div class="sg"><div class="k">안타</div><div class="v">${b.hit}</div></div>
-      <div class="sg"><div class="k">홈런</div><div class="v">${b.hr}</div></div>
-      <div class="sg"><div class="k">타점</div><div class="v">${b.rbi}</div></div>
-      <div class="sg"><div class="k">득점</div><div class="v">${b.run}</div></div>
-      <div class="sg"><div class="k">도루</div><div class="v">${b.sb}</div></div>
-      <div class="sg"><div class="k">4구</div><div class="v">${b.bb}</div></div>
-      <div class="sg"><div class="k">삼진</div><div class="v">${b.kk}</div></div>
-      <div class="sg"><div class="k">타수</div><div class="v">${b.ab}</div></div>
-      <div class="sg"><div class="k">경기</div><div class="v">${b.g}</div></div>
+      ${sg('타율', r3(b.avg))}${sg('OPS+', b.opsp ?? '-')}${sg('OPS', r3(b.ops))}
+      ${sg('출루율*', r3(b.obp))}${sg('장타율', r3(b.slg))}
+      ${sg('ISO', r3(b.iso))}${sg('BB%', (b.bbp ?? '-')+'%')}${sg('K%', (b.kp ?? '-')+'%')}
+      ${sg('BABIP*', r3(b.babip))}${sg('2루타', b.d2)}
+      ${sg('3루타', b.d3)}${sg('홈런', b.hr)}${sg('타점', b.rbi)}
+      ${sg('득점', b.run)}${sg('도루', b.sb)}
     </div>
+    <div class="muted" style="margin-top:8px">* 출루율·OPS·OPS+·BABIP는 사구·희생타 미포함 약식 · OPS+ 100 = 리그 평균 (파크팩터 미적용)</div>
     <h4>최근 5경기</h4>
     <table><tr><th>날짜</th><th>상대</th><th>타수</th><th>안타</th><th>HR</th><th>타점</th></tr>
     ${[...b.recent].reverse().map(r => `<tr><td>${r.date.slice(5)}</td><td>${esc(r.opp)}</td>
@@ -511,26 +570,47 @@ window.openBatter = i => {
 window.openPitcher = i => {
   const p = pits[i];
   openModal(`
-    <h3>${esc(p.name)} <span class="muted">투수</span></h3>
-    <div class="sub">SSG 경기 박스스코어 합산 (${p.g}경기 등판)</div>
+    <h3>${esc(p.name)} <span class="muted">투수</span>${entryBadge(p.name)}</h3>
+    <div class="sub">${p.g}경기 등판 · ${esc(p.ip)}이닝 · 시즌 전 경기 박스스코어 합산</div>
     <div class="statgrid">
-      <div class="sg"><div class="k">ERA</div><div class="v">${esc(p.era)}</div></div>
-      <div class="sg"><div class="k">승-패</div><div class="v">${p.w}-${p.l}</div></div>
-      <div class="sg"><div class="k">세이브</div><div class="v">${p.sv}</div></div>
-      <div class="sg"><div class="k">홀드</div><div class="v">${p.hld}</div></div>
-      <div class="sg"><div class="k">이닝</div><div class="v">${esc(p.ip)}</div></div>
-      <div class="sg"><div class="k">탈삼진</div><div class="v">${p.kk}</div></div>
-      <div class="sg"><div class="k">WHIP</div><div class="v">${esc(p.whip)}</div></div>
-      <div class="sg"><div class="k">피안타</div><div class="v">${p.hit}</div></div>
-      <div class="sg"><div class="k">4구</div><div class="v">${p.bb}</div></div>
-      <div class="sg"><div class="k">자책</div><div class="v">${p.er}</div></div>
+      ${sg('ERA', esc(p.era))}${sg('FIP', p.fip ?? '-')}${sg('WHIP', p.whip ?? '-')}
+      ${sg('승-패', p.w+'-'+p.l)}${sg('세/홀', p.sv+'/'+p.hld)}
+      ${sg('K/9', p.k9 ?? '-')}${sg('BB/9', p.bb9 ?? '-')}${sg('HR/9', p.hr9 ?? '-')}
+      ${sg('K%', (p.kp ?? '-')+'%')}${sg('BB%', (p.bbp ?? '-')+'%')}
+      ${sg('피안타율', r3(p.oavg))}${sg('탈삼진', p.kk)}${sg('피안타', p.hit)}
+      ${sg('4구', p.bb)}${sg('자책', p.er)}
     </div>
+    <div class="muted" style="margin-top:8px">FIP 상수 ${D.league?.means?.fip_c ?? '-'} (리그 전체 합산) · K%·BB%는 상대 타자 기준</div>
     <h4>최근 5경기</h4>
     <table><tr><th>날짜</th><th>상대</th><th>이닝</th><th>자책</th><th>K</th><th>결과</th></tr>
     ${[...p.recent].reverse().map(r => `<tr><td>${r.date.slice(5)}</td><td>${esc(r.opp)}</td>
       <td>${esc(r.inn||'')}</td><td>${r.er??0}</td><td>${r.kk??0}</td><td>${esc(r.wls||'')}</td></tr>`).join('')}
     </table>`);
 };
+
+/* ── 리그 리더보드 ── */
+(function renderBoards() {
+  const L = D.league || {};
+  const boards = L.boards || {};
+  const mk = (defs, data) => defs.map(([key, title]) => {
+    const rows = (data || {})[key] || [];
+    return `<div class="board"><div class="bt">${title}</div><ol>` +
+      rows.map((r, i) => `<li class="${r.team === SSG ? 'ssg' : ''}">
+        <span><span class="rk">${i + 1}</span><span class="nm">${esc(r.name)} <small>${esc(r.team)}</small></span></span>
+        <span class="vl">${esc(String(r.v ?? '-')).replace(/^0\./, '.')}</span></li>`).join('') + `</ol></div>`;
+  }).join('');
+  document.getElementById('boards-bat').innerHTML = mk(
+    [['avg','타율'],['hr','홈런'],['rbi','타점'],['sb','도루'],['ops','OPS'],['opsp','OPS+']],
+    boards.bat);
+  document.getElementById('boards-pit').innerHTML = mk(
+    [['era','ERA'],['fip','FIP'],['w','다승'],['sv','세이브'],['hld','홀드'],['kk','탈삼진']],
+    boards.pit);
+  const m = L.means || {};
+  document.getElementById('lg-note-bat').textContent =
+    `리그 평균 OBP* ${m.obp ?? '-'} · SLG ${m.slg ?? '-'}`;
+  document.getElementById('lg-note-pit').textContent =
+    `리그 ERA ${m.era ?? '-'} · FIP 상수 ${m.fip_c ?? '-'}`;
+})();
 </script>
 </body>
 </html>

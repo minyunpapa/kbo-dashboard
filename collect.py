@@ -111,7 +111,7 @@ def fetch_record(gid: str) -> dict | None:
         "wls": [{k: p.get(k) for k in ("name", "wls", "w", "l", "s")}
                 for p in rec.get("pitchingResult") or []],
         "etc": [{"how": e.get("how"), "result": e.get("result")}
-                for e in (rec.get("etcRecords") or [])[:10]],
+                for e in (rec.get("etcRecords") or [])],
     }
     for side in ("home", "away"):
         out[f"bat_{side}"] = [{k: p.get(k) for k in BAT_KEEP}
@@ -265,6 +265,8 @@ def compute_league(games, opening, official):
         last10 = s["results"][-10:]
         standings.append({
             "rank": official.get(t, {}).get("rank") or i, "team": t,
+            "tavg": official.get(t, {}).get("hra"),
+            "tera": official.get(t, {}).get("era"),
             "w": s["w"], "l": s["l"], "d": s["d"], "pct": round(pct(s), 3),
             "gb": round(((leader["w"] - s["w"]) + (s["l"] - leader["l"])) / 2, 1),
             "streak": streak(s["results"]),
@@ -324,7 +326,7 @@ def parse_xbh(etc: list[dict], how: str) -> list[str]:
 
 
 def aggregate_players(finals, cache):
-    """리그 전체 타자/투수 집계. key=playerCode."""
+    """리그 전체 타자/투수 집계 (전 경기 게임로그 포함). key=playerCode."""
     bat: dict[str, dict] = {}
     pit: dict[str, dict] = {}
     ambiguous = 0
@@ -334,6 +336,8 @@ def aggregate_players(finals, cache):
             continue
         name_to_code: dict[str, set] = {}
         for side, team in (("home", g["home"]), ("away", g["away"])):
+            opp = g["away"] if side == "home" else g["home"]
+            ha = "H" if side == "home" else "A"
             for p in det.get(f"bat_{side}") or []:
                 code, nm = p.get("playerCode"), p.get("name")
                 if not code or not nm:
@@ -342,30 +346,35 @@ def aggregate_players(finals, cache):
                 b = bat.setdefault(code, {
                     "name": nm, "team": team, "g": 0, "ab": 0, "hit": 0,
                     "hr": 0, "rbi": 0, "bb": 0, "kk": 0, "run": 0, "sb": 0,
-                    "d2": 0, "d3": 0, "pos": None, "avg": None, "recent": []})
+                    "d2": 0, "d3": 0, "pos": None, "avg": None, "log": []})
                 b["g"] += 1
                 b["team"] = team
                 for k in ("ab", "hit", "hr", "rbi", "bb", "kk", "run", "sb"):
                     b[k] += p.get(k) or 0
                 b["pos"] = p.get("pos") or b["pos"]
                 b["avg"] = p.get("hra") or b["avg"]
-                b["recent"].append({
-                    "date": g["date"],
-                    "opp": g["away"] if side == "home" else g["home"],
-                    "ab": p.get("ab"), "hit": p.get("hit"),
-                    "hr": p.get("hr"), "rbi": p.get("rbi")})
-            for p in det.get(f"pit_{side}") or []:
+                b["log"].append({
+                    "d": g["date"], "o": opp, "ha": ha,
+                    "ab": p.get("ab") or 0, "h": p.get("hit") or 0,
+                    "hr": p.get("hr") or 0, "bi": p.get("rbi") or 0,
+                    "bb": p.get("bb") or 0, "so": p.get("kk") or 0,
+                    "r": p.get("run") or 0, "sb": p.get("sb") or 0})
+            for idx, p in enumerate(det.get(f"pit_{side}") or []):
                 code, nm = p.get("pcode"), p.get("name")
                 if not code or not nm:
                     continue
                 t = pit.setdefault(code, {
-                    "name": nm, "team": team, "g": 0, "outs": 0, "hit": 0,
-                    "bb": 0, "kk": 0, "er": 0, "r": 0, "hr": 0, "bf": 0,
-                    "ab": 0, "w": 0, "l": 0, "sv": 0, "hld": 0,
-                    "era": None, "recent": []})
+                    "name": nm, "team": team, "g": 0, "gs": 0, "qs": 0,
+                    "outs": 0, "hit": 0, "bb": 0, "kk": 0, "er": 0, "r": 0,
+                    "hr": 0, "bf": 0, "ab": 0, "w": 0, "l": 0, "sv": 0,
+                    "hld": 0, "era": None, "log": []})
                 t["g"] += 1
                 t["team"] = team
-                t["outs"] += outs_from_inn(p.get("inn"))
+                outs = outs_from_inn(p.get("inn"))
+                t["outs"] += outs
+                gs = idx == 0
+                t["gs"] += gs
+                t["qs"] += gs and outs >= 18 and (p.get("er") or 0) <= 3
                 for k in ("hit", "bb", "kk", "er", "r", "hr", "bf", "ab"):
                     t[k] += p.get(k) or 0
                 t["era"] = p.get("era") or t["era"]
@@ -374,11 +383,12 @@ def aggregate_players(finals, cache):
                 t["l"] += wls == "패"
                 t["sv"] += wls == "세"
                 t["hld"] += wls == "홀"
-                t["recent"].append({
-                    "date": g["date"],
-                    "opp": g["away"] if side == "home" else g["home"],
-                    "inn": p.get("inn"), "er": p.get("er"),
-                    "kk": p.get("kk"), "wls": wls})
+                t["log"].append({
+                    "d": g["date"], "o": opp, "ha": ha, "gs": int(gs),
+                    "ip": p.get("inn"), "out": outs,
+                    "h": p.get("hit") or 0, "r": p.get("r") or 0,
+                    "er": p.get("er") or 0, "bb": p.get("bb") or 0,
+                    "so": p.get("kk") or 0, "wls": wls})
         # 2루타/3루타 — 이름 → playerCode (경기 내 유일할 때만)
         for how, key in (("2루타", "d2"), ("3루타", "d3")):
             for nm in parse_xbh(det.get("etc"), how):
@@ -392,29 +402,44 @@ def aggregate_players(finals, cache):
     return bat, pit
 
 
+# wOBA 선형가중치 (MLB 표준 계열 고정값 — 리그 OBP에 스케일링해 사용)
+W_BB, W_1B, W_2B, W_3B, W_HR = 0.69, 0.88, 1.25, 1.59, 2.05
+WOBA_SCALE = 1.20
+
+
 def sabermetrics(bat, pit, team_games):
-    """약식 세이버 (HBP·희생타 미포함 — 주석 필수) + 리그 FIP 상수."""
-    lg = {"ab": 0, "hit": 0, "bb": 0, "hr": 0, "d2": 0, "d3": 0, "kk": 0}
+    """약식 세이버 (HBP·희생타 미포함 — 주석 필수) + wOBA/wRC+ + 리그 FIP 상수."""
+    lg = {"ab": 0, "hit": 0, "bb": 0, "hr": 0, "d2": 0, "d3": 0, "kk": 0, "run": 0}
     for b in bat.values():
         for k in lg:
             lg[k] += b[k]
     lg_tb = lg["hit"] + lg["d2"] + 2 * lg["d3"] + 3 * lg["hr"]
-    lg_obp = (lg["hit"] + lg["bb"]) / (lg["ab"] + lg["bb"])
+    lg_pa = lg["ab"] + lg["bb"]
+    lg_obp = (lg["hit"] + lg["bb"]) / lg_pa
     lg_slg = lg_tb / lg["ab"]
+    lg_rpa = lg["run"] / lg_pa            # 리그 득점/타석 (득점 합계는 정확)
+
+    def woba_raw(h, bb, d2, d3, hr, pa):
+        s1 = h - d2 - d3 - hr
+        return (W_BB * bb + W_1B * s1 + W_2B * d2 + W_3B * d3 + W_HR * hr) / pa
+
+    lg_woba_raw = woba_raw(lg["hit"], lg["bb"], lg["d2"], lg["d3"], lg["hr"], lg_pa)
+    woba_k = lg_obp / lg_woba_raw          # 관례: 리그 wOBA = 리그 OBP
+    lg_woba = lg_obp
 
     p_outs = sum(t["outs"] for t in pit.values())
     p_ip = p_outs / 3
     lg_era = sum(t["er"] for t in pit.values()) * 9 / p_ip
-    lg_hr = sum(t["hr"] for t in pit.values())
-    lg_bb = sum(t["bb"] for t in pit.values())
-    lg_kk = sum(t["kk"] for t in pit.values())
-    fip_c = lg_era - (13 * lg_hr + 3 * lg_bb - 2 * lg_kk) / p_ip
+    fip_c = lg_era - (13 * sum(t["hr"] for t in pit.values())
+                      + 3 * sum(t["bb"] for t in pit.values())
+                      - 2 * sum(t["kk"] for t in pit.values())) / p_ip
 
     for b in bat.values():
         ab, h, bb = b["ab"], b["hit"], b["bb"]
         pa = ab + bb
         tb = h + b["d2"] + 2 * b["d3"] + 3 * b["hr"]
-        b["recent"] = b["recent"][-5:]
+        b["tb"] = tb
+        b["s1"] = h - b["d2"] - b["d3"] - b["hr"]
         if not b["avg"]:
             b["avg"] = f"{h / ab:.3f}".lstrip("0") if ab else "-"
         b["obp"] = round((h + bb) / pa, 3) if pa else None
@@ -427,12 +452,18 @@ def sabermetrics(bat, pit, team_games):
         b["babip"] = round((h - b["hr"]) / babip_den, 3) if babip_den > 0 else None
         b["opsp"] = (round(100 * (b["obp"] / lg_obp + b["slg"] / lg_slg - 1))
                      if pa and ab else None)
+        if pa:
+            woba = woba_raw(h, bb, b["d2"], b["d3"], b["hr"], pa) * woba_k
+            b["woba"] = round(woba, 3)
+            wraa = (woba - lg_woba) / WOBA_SCALE * pa
+            b["wrcp"] = round(100 * ((wraa / pa + lg_rpa) / lg_rpa))
+        else:
+            b["woba"] = b["wrcp"] = None
         b["pa"] = pa
         b["qualified"] = pa >= team_games * 2.8   # 약식 PA(사구 미포함) 보정 계수
 
     for t in pit.values():
         ip = t["outs"] / 3
-        t["recent"] = t["recent"][-5:]
         t["ip"] = inn_display(t["outs"])
         if not t["era"]:
             t["era"] = f"{t['er'] * 9 / ip:.2f}" if ip else "-"
@@ -448,7 +479,73 @@ def sabermetrics(bat, pit, team_games):
         t["qualified"] = t["outs"] >= team_games * 3   # 규정이닝(팀경기×1)
 
     return {"obp": round(lg_obp, 3), "slg": round(lg_slg, 3),
-            "era": round(lg_era, 2), "fip_c": round(fip_c, 2)}
+            "era": round(lg_era, 2), "fip_c": round(fip_c, 2),
+            "woba": round(lg_woba, 3), "rpa": round(lg_rpa, 4),
+            "woba_scale": WOBA_SCALE}
+
+
+def team_detail(finals, cache, bat, pit, official):
+    """팀별 세부 지표 — 타격/투수/수비 + 상대전적 + 월별."""
+    teams: dict[str, dict] = {}
+
+    def T(name):
+        return teams.setdefault(name, {
+            "bat": {k: 0 for k in ("ab", "hit", "bb", "kk", "hr", "d2", "d3",
+                                   "run", "sb")},
+            "pit": {k: 0 for k in ("outs", "hit", "bb", "kk", "er", "r", "hr",
+                                   "sv", "ab")},
+            "err": 0, "vs": {}, "monthly": {}})
+
+    for b in bat.values():
+        d = T(b["team"])["bat"]
+        for k in d:
+            d[k] += b[k]
+    for t in pit.values():
+        d = T(t["team"])["pit"]
+        for k in d:
+            d[k] += t[k]
+    for g in finals:
+        det = cache.get(g["gid"])
+        rheb = ((det or {}).get("line") or {}).get("rheb") or {}
+        for side, team in (("home", g["home"]), ("away", g["away"])):
+            e = (rheb.get(side) or {}).get("e")
+            T(team)["err"] += e or 0
+            opp = g["away"] if side == "home" else g["home"]
+            r = result_for(team, g)
+            key = {"W": "w", "L": "l", "D": "d"}[r]
+            tv = T(team)["vs"].setdefault(opp, {"w": 0, "l": 0, "d": 0})
+            tv[key] += 1
+            mon = f"{int(g['date'][5:7])}월"
+            tm = T(team)["monthly"].setdefault(mon, {"w": 0, "l": 0, "d": 0})
+            tm[key] += 1
+
+    out = {}
+    for name, d in teams.items():
+        b, p = d["bat"], d["pit"]
+        pa = b["ab"] + b["bb"]
+        tb = b["hit"] + b["d2"] + 2 * b["d3"] + 3 * b["hr"]
+        ip = p["outs"] / 3
+        off = official.get(name, {})
+        out[name] = {
+            "bat": {
+                "avg": off.get("hra") or (round(b["hit"] / b["ab"], 3) if b["ab"] else None),
+                "obp": round((b["hit"] + b["bb"]) / pa, 3) if pa else None,
+                "slg": round(tb / b["ab"], 3) if b["ab"] else None,
+                "ops": round((b["hit"] + b["bb"]) / pa + tb / b["ab"], 3) if pa and b["ab"] else None,
+                "run": b["run"], "hr": b["hr"], "sb": b["sb"],
+                "bb": b["bb"], "so": b["kk"], "d2": b["d2"], "d3": b["d3"],
+            },
+            "pit": {
+                "era": off.get("era") or (round(p["er"] * 9 / ip, 2) if ip else None),
+                "fip": None,   # 아래에서 채움 (리그 상수 필요해 main에서 주입해도 되지만 약식으로 계산)
+                "whip": round((p["hit"] + p["bb"]) / ip, 2) if ip else None,
+                "so": p["kk"], "bb": p["bb"], "hr": p["hr"],
+                "oavg": round(p["hit"] / p["ab"], 3) if p["ab"] else None,
+                "sv": p["sv"], "ip_outs": p["outs"], "er": p["er"], "r": p["r"],
+            },
+            "err": d["err"], "vs": d["vs"], "monthly": d["monthly"],
+        }
+    return out
 
 
 def leaderboards(bat, pit):
@@ -475,7 +572,7 @@ def leaderboards(bat, pit):
             "rbi":  top(list(bat.values()), "rbi"),
             "sb":   top(list(bat.values()), "sb"),
             "ops":  top(bq, "ops", fmt=lambda r: f"{r['ops']:.3f}".lstrip("0")),
-            "opsp": top(bq, "opsp"),
+            "wrcp": top(bq, "wrcp"),
         },
         "pit": {
             "era":  top(pq, "era", asc=True, fmt=lambda r: str(r["era"])),
@@ -569,8 +666,16 @@ def main():
     team_games = max((s["w"] + s["l"] + s["d"]) for s in league["standings"])
     lg = sabermetrics(bat, pit, team_games)
     boards = leaderboards(bat, pit)
+    teams = team_detail(league["finals"], cache, bat, pit, official)
+    for td in teams.values():
+        ip = td["pit"]["ip_outs"] / 3
+        if ip:
+            td["pit"]["fip"] = round(
+                (13 * td["pit"]["hr"] + 3 * td["pit"]["bb"]
+                 - 2 * td["pit"]["so"]) / ip + lg["fip_c"], 2)
     print(f"      batters {len(bat)}, pitchers {len(pit)}, "
-          f"lgOBP*{lg['obp']} lgSLG{lg['slg']} FIP상수 {lg['fip_c']}")
+          f"lgOBP*{lg['obp']} lgSLG{lg['slg']} FIP상수 {lg['fip_c']} "
+          f"lgR/PA {lg['rpa']}")
 
     print("[6/7] upcoming previews (선발/라인업/엔트리)...")
     today = datetime.now(KST).date().isoformat()
@@ -637,6 +742,7 @@ def main():
         "rank_history": league["rank_history"],
         "live": live, "next": nexts, "roster": roster,
         "league": {"means": lg, "boards": boards},
+        "teams": teams,
         "ssg": {
             "games": ssg_games, "vs": vs, "monthly": monthly,
             "batters": ssg_bat, "pitchers": ssg_pit,

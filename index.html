@@ -219,8 +219,9 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
       <div class="log-wrap"><table id="pitchers"></table></div>
     </div>
     <div class="muted" style="margin:10px 4px">
-      ⚠️ OBP·OPS·OPS+·BABIP·BB%·K%는 사구(HBP)·희생타가 공개 API에 없어 <b>약식</b>으로 계산됩니다.
-      2루타·3루타는 경기 기록 공시 파싱, FIP 상수는 리그 전체 합산으로 산출. OPS+는 파크팩터 미적용 (100 = 리그 평균).
+      ⚠️ wRC+·wOBA·OBP·OPS류·BABIP·BB%·K%는 사구(HBP)·희생타가 공개 API에 없어 <b>약식</b>으로 계산됩니다.
+      wRC+: 표준 선형가중치(wOBA)를 리그 OBP에 스케일링, 리그 평균 100, 파크팩터 미적용.
+      2루타·3루타는 경기 기록 공시 파싱, FIP 상수는 리그 전체 합산. 선수를 클릭하면 누적 전체 지표·스플릿·시즌 게임로그가 열립니다.
     </div>
   </div>
 
@@ -235,8 +236,8 @@ footer { margin:20px 4px; color:var(--muted); font-size:11.5px; line-height:1.6;
       <div class="board-grid" id="boards-pit"></div>
     </div>
     <div class="muted" style="margin:10px 4px">
-      규정: 타자 = 약식 타석 ≥ 팀경기 × 2.8 (타율·OPS·OPS+) / 투수 = 규정이닝 팀경기 × 1 (ERA·FIP).
-      OPS·OPS+는 사구·희생타 미포함 약식. SSG 선수는 <span style="color:var(--ssg);font-weight:700">빨간색</span>.
+      규정: 타자 = 약식 타석 ≥ 팀경기 × 2.8 (타율·OPS·wRC+) / 투수 = 규정이닝 팀경기 × 1 (ERA·FIP).
+      OPS·wRC+는 사구·희생타 미포함 약식 (wRC+ 100 = 리그 평균, 파크팩터 미적용). SSG 선수는 <span style="color:var(--ssg);font-weight:700">빨간색</span>.
     </div>
   </div>
 
@@ -257,6 +258,8 @@ const COLORS = { LG:'#C30452', KT:'#333333', '삼성':'#074CA1', KIA:'#EA0029',
   '롯데':'#041E42', '키움':'#570514' };
 const fmtPct = p => '.' + String(Math.round(p*1000)).padStart(3,'0');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const r3 = v => v == null ? '-' :
+  (typeof v === 'number' ? v.toFixed(3) : String(v)).replace(/^0\./, '.');
 const WLS = {W:'승', L:'패', S:'세이브', H:'홀드'};
 const me = D.standings.find(s => s.team === SSG);
 
@@ -376,17 +379,63 @@ new Chart(document.getElementById('rankChart'), {
 document.getElementById('rank-title').textContent =
   `📈 순위 추이 — 개막 후 ${rh.dates.length}경기일`;
 
-/* ── 순위표 ── */
+/* ── 순위표 (행 클릭 = 팀 상세) ── */
 document.getElementById('standings').innerHTML =
-  `<tr><th>순위</th><th style="text-align:left">팀</th><th>승</th><th>무</th><th>패</th><th>승률</th><th>게임차</th><th>최근10</th><th>연속</th></tr>` +
+  `<tr><th>순위</th><th style="text-align:left">팀</th><th>승</th><th>무</th><th>패</th><th>승률</th><th>게임차</th><th>타율</th><th>ERA</th><th>최근10</th><th>연속</th></tr>` +
   D.standings.map(s => `
-    <tr class="${s.team===SSG?'ssg-row':''}">
+    <tr class="clickable ${s.team===SSG?'ssg-row':''}" onclick="openTeam('${esc(s.team)}')">
       <td>${s.rank}</td>
       <td class="team-name"><span class="dot" style="background:${COLORS[s.team]||'#999'}"></span>${esc(s.team)}</td>
       <td>${s.w}</td><td>${s.d}</td><td>${s.l}</td>
       <td>${fmtPct(s.pct)}</td><td>${s.gb===0?'-':s.gb}</td>
+      <td>${r3(s.tavg)}</td><td>${esc(s.tera ?? '-')}</td>
       <td style="font-size:11.5px">${esc(s.last10)}</td><td>${esc(s.streak)}</td>
     </tr>`).join('');
+
+window.openTeam = name => {
+  const td = (D.teams || {})[name];
+  const s = D.standings.find(x => x.team === name) || {};
+  if (!td) return;
+  const b = td.bat, p = td.pit;
+  const vsArr = Object.entries(td.vs || {}).sort((x, y) => (y[1].w - y[1].l) - (x[1].w - x[1].l));
+  const vsHtml = vsArr.map(([t, r]) => {
+    const tot = r.w + r.l + (r.d || 0) || 1;
+    return `<div class="vs-item">
+      <div class="t"><span><span class="dot" style="background:${COLORS[t]||'#999'}"></span>${esc(t)}</span>
+        <span class="rec">${r.w}승${r.d ? r.d + '무' : ''}${r.l}패</span></div>
+      <div class="bar"><div class="w" style="width:${r.w/tot*100}%"></div><div class="l" style="width:${r.l/tot*100}%"></div></div>
+    </div>`; }).join('');
+  const monHtml = ['3월','4월','5월','6월','7월','8월','9월','10월']
+    .filter(m => (td.monthly || {})[m]).map(m => {
+      const r = td.monthly[m];
+      const pct = (r.w + r.l) ? r.w / (r.w + r.l) : 0;
+      return `<div class="mon"><div class="m">${m}</div>
+        <div class="r" style="color:${pct>=.5?'var(--win)':'var(--lose)'}">${r.w}-${r.l}${r.d?'-'+r.d:''}</div></div>`;
+    }).join('');
+  openModal(`
+    <h3><span class="dot" style="background:${COLORS[name]||'#999'}"></span>${esc(name)}
+      <span class="muted">${s.rank}위 · ${s.w}승 ${s.d}무 ${s.l}패 (${fmtPct(s.pct)})</span></h3>
+    <div class="sub">게임차 ${s.gb} · 홈 ${s.home} · 원정 ${s.away} · 득실 ${(s.rdiff>0?'+':'')+s.rdiff} · ${s.streak} 중</div>
+    <h4>타격</h4>
+    <div class="statgrid">
+      ${sg('팀 타율', r3(b.avg))}${sg('출루율*', r3(b.obp))}${sg('장타율', r3(b.slg))}
+      ${sg('OPS*', r3(b.ops))}${sg('득점', b.run)}
+      ${sg('홈런', b.hr)}${sg('2루타', b.d2)}${sg('3루타', b.d3)}
+      ${sg('도루', b.sb)}${sg('볼넷', b.bb)}
+    </div>
+    <h4>투수 · 수비</h4>
+    <div class="statgrid">
+      ${sg('팀 ERA', esc(p.era ?? '-'))}${sg('FIP', p.fip?.toFixed?.(2) ?? '-')}${sg('WHIP', p.whip?.toFixed?.(2) ?? '-')}
+      ${sg('탈삼진', p.so)}${sg('피안타율', r3(p.oavg))}
+      ${sg('실점', p.r)}${sg('자책', p.er)}${sg('세이브', p.sv)}
+      ${sg('4구 허용', p.bb)}${sg('실책', td.err)}
+    </div>
+    <h4>상대전적</h4>
+    <div class="vs-grid" style="grid-template-columns:repeat(2,1fr)">${vsHtml}</div>
+    <h4>월별</h4>
+    <div class="mon-grid">${monHtml}</div>
+    <div class="muted" style="margin-top:8px">팀 타율·ERA는 공식 순위 기준, 나머지는 박스스코어 합산 (출루율·OPS는 사구·희생타 미포함 약식)</div>`);
+};
 
 /* ── 최근 10 ── */
 const recent = D.ssg.games.slice(-10);
@@ -474,7 +523,7 @@ window.openGame = i => {
 
 /* ── 선수단 ── */
 const num = v => parseFloat(String(v ?? '').replace(/[^\d.\-]/g, '')) || 0;
-const RATE_KEYS = new Set(['avg', 'era', 'whip', 'ops', 'opsp', 'obp', 'slg', 'fip', 'bbp', 'kp']);
+const RATE_KEYS = new Set(['avg', 'era', 'whip', 'ops', 'opsp', 'wrcp', 'woba', 'obp', 'slg', 'fip', 'bbp', 'kp']);
 function renderSortable(elId, cols, rows, rowHtml, qualFn, defaultKey, asc) {
   const el = document.getElementById(elId);
   let sortKey = defaultKey, sortAsc = asc;
@@ -515,23 +564,21 @@ if (D.roster) {
     <div class="muted" style="margin-top:8px">경기 프리뷰 엔트리 기준 — 등록/말소는 매 경기일 자동 반영. 명단의 선수는 표에 <span class="entry-badge">1군</span> 표시</div>`;
 }
 const entryBadge = n => rosterSet.has(n) ? '<span class="entry-badge">1군</span>' : '';
-const r3 = v => v == null ? '-' :
-  (typeof v === 'number' ? v.toFixed(3) : String(v)).replace(/^0\./, '.');
 
 /* ── 선수단 테이블 ── */
 const bats = D.ssg.batters || [];
 renderSortable('batters',
-  [['avg','타율'],['ops','OPS'],['opsp','OPS+'],['name','이름'],['g','G'],['hit','안타'],
+  [['avg','타율'],['ops','OPS'],['wrcp','wRC+'],['name','이름'],['g','G'],['pa','PA'],['hit','안타'],
    ['hr','HR'],['rbi','타점'],['sb','도루'],['bbp','BB%'],['kp','K%']],
   bats,
   (b) => `<tr class="clickable" onclick="openBatter(${bats.indexOf(b)})">
     <td style="font-weight:800">${r3(b.avg)}</td>
     <td>${r3(b.ops)}</td>
-    <td style="font-weight:700">${b.opsp ?? '-'}</td>
+    <td style="font-weight:700">${b.wrcp ?? '-'}</td>
     <td style="font-weight:700;text-align:left">${esc(b.name)} <span class="muted">${esc(b.pos||'')}</span>${entryBadge(b.name)}</td>
-    <td>${b.g}</td><td>${b.hit}</td><td>${b.hr}</td><td>${b.rbi}</td>
+    <td>${b.g}</td><td>${b.pa}</td><td>${b.hit}</td><td>${b.hr}</td><td>${b.rbi}</td>
     <td>${b.sb}</td><td>${b.bbp ?? '-'}</td><td>${b.kp ?? '-'}</td></tr>`,
-  b => (b.qualified ? 1 : 0), 'opsp', false);
+  b => (b.qualified ? 1 : 0), 'wrcp', false);
 
 const pits = D.ssg.pitchers || [];
 renderSortable('pitchers',
@@ -547,45 +594,98 @@ renderSortable('pitchers',
   p => (p.qualified ? 1 : 0), 'era', true);
 
 const sg = (k, v) => `<div class="sg"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+
+/* 스플릿 계산 (게임로그 기반) */
+function batSplit(rows) {
+  const s = rows.reduce((a, r) => { ['ab','h','hr','bi','bb','so','r','sb']
+    .forEach(k => a[k] += r[k] || 0); return a; }, {ab:0,h:0,hr:0,bi:0,bb:0,so:0,r:0,sb:0});
+  s.avg = s.ab ? r3(s.h / s.ab) : '-';
+  s.g = rows.length;
+  return s;
+}
+function pitSplit(rows) {
+  const s = rows.reduce((a, r) => { ['out','h','r','er','bb','so']
+    .forEach(k => a[k] += r[k] || 0); return a; }, {out:0,h:0,r:0,er:0,bb:0,so:0});
+  s.era = s.out ? (s.er * 27 / s.out).toFixed(2) : '-';
+  s.ipd = Math.floor(s.out / 3) + ['', ' ⅓', ' ⅔'][s.out % 3];
+  s.g = rows.length;
+  return s;
+}
+const monthsOf = log => [...new Set(log.map(r => r.d.slice(5, 7)))].sort();
+
 window.openBatter = i => {
   const b = bats[i];
+  const log = b.log || [];
+  const home = batSplit(log.filter(r => r.ha === 'H'));
+  const away = batSplit(log.filter(r => r.ha === 'A'));
+  const monRows = monthsOf(log).map(m => {
+    const s = batSplit(log.filter(r => r.d.slice(5, 7) === m));
+    return `<tr><td>${+m}월</td><td>${s.g}</td><td>${s.avg}</td><td>${s.h}</td><td>${s.hr}</td><td>${s.bi}</td><td>${s.r}</td><td>${s.sb}</td></tr>`;
+  }).join('');
   openModal(`
     <h3>${esc(b.name)} <span class="muted">${esc(b.pos||'')} · 타자</span>${entryBadge(b.name)}</h3>
     <div class="sub">${b.g}경기 · ${b.pa}타석(약식) · 시즌 전 경기 박스스코어 합산</div>
     <div class="statgrid">
-      ${sg('타율', r3(b.avg))}${sg('OPS+', b.opsp ?? '-')}${sg('OPS', r3(b.ops))}
-      ${sg('출루율*', r3(b.obp))}${sg('장타율', r3(b.slg))}
-      ${sg('ISO', r3(b.iso))}${sg('BB%', (b.bbp ?? '-')+'%')}${sg('K%', (b.kp ?? '-')+'%')}
-      ${sg('BABIP*', r3(b.babip))}${sg('2루타', b.d2)}
-      ${sg('3루타', b.d3)}${sg('홈런', b.hr)}${sg('타점', b.rbi)}
-      ${sg('득점', b.run)}${sg('도루', b.sb)}
+      ${sg('타율', r3(b.avg))}${sg('wRC+*', b.wrcp ?? '-')}${sg('wOBA*', r3(b.woba))}
+      ${sg('OPS', r3(b.ops))}${sg('OPS+', b.opsp ?? '-')}
+      ${sg('출루율*', r3(b.obp))}${sg('장타율', r3(b.slg))}${sg('ISO', r3(b.iso))}
+      ${sg('BABIP*', r3(b.babip))}${sg('BB%', (b.bbp ?? '-')+'%')}
+      ${sg('K%', (b.kp ?? '-')+'%')}${sg('타석*', b.pa)}${sg('타수', b.ab)}
+      ${sg('안타', b.hit)}${sg('1루타', b.s1 ?? '-')}
+      ${sg('2루타', b.d2)}${sg('3루타', b.d3)}${sg('홈런', b.hr)}
+      ${sg('루타', b.tb ?? '-')}${sg('타점', b.rbi)}
+      ${sg('득점', b.run)}${sg('도루', b.sb)}${sg('볼넷', b.bb)}
+      ${sg('삼진', b.kk)}${sg('경기', b.g)}
     </div>
-    <div class="muted" style="margin-top:8px">* 출루율·OPS·OPS+·BABIP는 사구·희생타 미포함 약식 · OPS+ 100 = 리그 평균 (파크팩터 미적용)</div>
-    <h4>최근 5경기</h4>
-    <table><tr><th>날짜</th><th>상대</th><th>타수</th><th>안타</th><th>HR</th><th>타점</th></tr>
-    ${[...b.recent].reverse().map(r => `<tr><td>${r.date.slice(5)}</td><td>${esc(r.opp)}</td>
-      <td>${r.ab??0}</td><td>${r.hit??0}</td><td>${r.hr??0}</td><td>${r.rbi??0}</td></tr>`).join('')}
-    </table>`);
+    <div class="muted" style="margin-top:8px">* wRC+·wOBA·출루율·OPS류·BABIP·타석은 사구·희생타 미포함 약식 (wRC+ 100 = 리그 평균, 파크팩터 미적용)</div>
+    <h4>홈 / 원정</h4>
+    <table><tr><th></th><th>G</th><th>타율</th><th>안타</th><th>HR</th><th>타점</th><th>득점</th><th>도루</th></tr>
+      <tr><td>홈</td><td>${home.g}</td><td>${home.avg}</td><td>${home.h}</td><td>${home.hr}</td><td>${home.bi}</td><td>${home.r}</td><td>${home.sb}</td></tr>
+      <tr><td>원정</td><td>${away.g}</td><td>${away.avg}</td><td>${away.h}</td><td>${away.hr}</td><td>${away.bi}</td><td>${away.r}</td><td>${away.sb}</td></tr></table>
+    <h4>월별</h4>
+    <table><tr><th>월</th><th>G</th><th>타율</th><th>안타</th><th>HR</th><th>타점</th><th>득점</th><th>도루</th></tr>${monRows}</table>
+    <h4>시즌 게임 로그 (${log.length}경기)</h4>
+    <div style="max-height:260px;overflow-y:auto">
+    <table><tr><th>날짜</th><th>상대</th><th></th><th>타수</th><th>안타</th><th>HR</th><th>타점</th><th>4구</th><th>삼진</th><th>득점</th><th>도루</th></tr>
+    ${[...log].reverse().map(r => `<tr><td>${r.d.slice(5)}</td><td>${esc(r.o)}</td><td class="muted">${r.ha==='H'?'홈':'원정'}</td>
+      <td>${r.ab}</td><td>${r.h}</td><td>${r.hr}</td><td>${r.bi}</td><td>${r.bb}</td><td>${r.so}</td><td>${r.r}</td><td>${r.sb}</td></tr>`).join('')}
+    </table></div>`);
 };
 window.openPitcher = i => {
   const p = pits[i];
+  const log = p.log || [];
+  const st = pitSplit(log.filter(r => r.gs)), rl = pitSplit(log.filter(r => !r.gs));
+  const home = pitSplit(log.filter(r => r.ha === 'H')), away = pitSplit(log.filter(r => r.ha === 'A'));
+  const monRows = monthsOf(log).map(m => {
+    const s = pitSplit(log.filter(r => r.d.slice(5, 7) === m));
+    return `<tr><td>${+m}월</td><td>${s.g}</td><td>${s.era}</td><td>${s.ipd}</td><td>${s.h}</td><td>${s.er}</td><td>${s.so}</td></tr>`;
+  }).join('');
+  const splitRow = (nm, s) => s.g ? `<tr><td>${nm}</td><td>${s.g}</td><td>${s.era}</td><td>${s.ipd}</td><td>${s.h}</td><td>${s.er}</td><td>${s.so}</td></tr>` : '';
   openModal(`
     <h3>${esc(p.name)} <span class="muted">투수</span>${entryBadge(p.name)}</h3>
-    <div class="sub">${p.g}경기 등판 · ${esc(p.ip)}이닝 · 시즌 전 경기 박스스코어 합산</div>
+    <div class="sub">${p.g}경기 (선발 ${p.gs} · QS ${p.qs}) · ${esc(p.ip)}이닝 · 시즌 전 경기 박스스코어 합산</div>
     <div class="statgrid">
       ${sg('ERA', esc(p.era))}${sg('FIP', p.fip?.toFixed?.(2) ?? '-')}${sg('WHIP', p.whip?.toFixed?.(2) ?? '-')}
       ${sg('승-패', p.w+'-'+p.l)}${sg('세/홀', p.sv+'/'+p.hld)}
       ${sg('K/9', p.k9 ?? '-')}${sg('BB/9', p.bb9 ?? '-')}${sg('HR/9', p.hr9 ?? '-')}
       ${sg('K%', (p.kp ?? '-')+'%')}${sg('BB%', (p.bbp ?? '-')+'%')}
-      ${sg('피안타율', r3(p.oavg))}${sg('탈삼진', p.kk)}${sg('피안타', p.hit)}
-      ${sg('4구', p.bb)}${sg('자책', p.er)}
+      ${sg('피안타율', r3(p.oavg))}${sg('이닝', esc(p.ip))}${sg('상대타자', p.bf)}
+      ${sg('탈삼진', p.kk)}${sg('피안타', p.hit)}
+      ${sg('피홈런', p.hr)}${sg('4구', p.bb)}${sg('실점', p.r)}
+      ${sg('자책', p.er)}${sg('QS', p.qs)}
     </div>
-    <div class="muted" style="margin-top:8px">FIP 상수 ${D.league?.means?.fip_c ?? '-'} (리그 전체 합산) · K%·BB%는 상대 타자 기준</div>
-    <h4>최근 5경기</h4>
-    <table><tr><th>날짜</th><th>상대</th><th>이닝</th><th>자책</th><th>K</th><th>결과</th></tr>
-    ${[...p.recent].reverse().map(r => `<tr><td>${r.date.slice(5)}</td><td>${esc(r.opp)}</td>
-      <td>${esc(r.inn||'')}</td><td>${r.er??0}</td><td>${r.kk??0}</td><td>${esc(r.wls||'')}</td></tr>`).join('')}
-    </table>`);
+    <div class="muted" style="margin-top:8px">FIP 상수 ${D.league?.means?.fip_c ?? '-'} (리그 합산) · K%·BB%는 상대 타자(BF) 기준 · QS = 선발 6이닝↑ 자책 3↓</div>
+    <h4>스플릿 (선발/구원 · 홈/원정)</h4>
+    <table><tr><th></th><th>G</th><th>ERA</th><th>이닝</th><th>피안타</th><th>자책</th><th>K</th></tr>
+      ${splitRow('선발', st)}${splitRow('구원', rl)}${splitRow('홈', home)}${splitRow('원정', away)}</table>
+    <h4>월별</h4>
+    <table><tr><th>월</th><th>G</th><th>ERA</th><th>이닝</th><th>피안타</th><th>자책</th><th>K</th></tr>${monRows}</table>
+    <h4>시즌 게임 로그 (${log.length}경기)</h4>
+    <div style="max-height:260px;overflow-y:auto">
+    <table><tr><th>날짜</th><th>상대</th><th></th><th>역할</th><th>이닝</th><th>피안타</th><th>실점</th><th>자책</th><th>4구</th><th>K</th><th>결과</th></tr>
+    ${[...log].reverse().map(r => `<tr><td>${r.d.slice(5)}</td><td>${esc(r.o)}</td><td class="muted">${r.ha==='H'?'홈':'원정'}</td>
+      <td>${r.gs?'선발':'구원'}</td><td>${esc(r.ip||'')}</td><td>${r.h}</td><td>${r.r}</td><td>${r.er}</td><td>${r.bb}</td><td>${r.so}</td><td>${esc(r.wls||'')}</td></tr>`).join('')}
+    </table></div>`);
 };
 
 /* ── 리그 리더보드 ── */
@@ -600,7 +700,7 @@ window.openPitcher = i => {
         <span class="vl">${esc(String(r.v ?? '-')).replace(/^0\./, '.')}</span></li>`).join('') + `</ol></div>`;
   }).join('');
   document.getElementById('boards-bat').innerHTML = mk(
-    [['avg','타율'],['hr','홈런'],['rbi','타점'],['sb','도루'],['ops','OPS'],['opsp','OPS+']],
+    [['avg','타율'],['hr','홈런'],['rbi','타점'],['sb','도루'],['ops','OPS'],['wrcp','wRC+*']],
     boards.bat);
   document.getElementById('boards-pit').innerHTML = mk(
     [['era','ERA'],['fip','FIP'],['w','다승'],['sv','세이브'],['hld','홀드'],['kk','탈삼진']],

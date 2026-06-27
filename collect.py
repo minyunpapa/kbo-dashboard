@@ -636,7 +636,8 @@ def main():
 
     print("[2/7] game summaries...")
     with ThreadPoolExecutor(max_workers=8) as ex:
-        games = [g for g in ex.map(game_summary, all_ids) if g and g["date"]]
+        games = [g for g in ex.map(game_summary, all_ids)
+                 if g and g["date"] and g["home"] and g["away"]]
     print(f"      {len(games)} games, {sum(g['status'] == 'RESULT' for g in games)} finished")
 
     print("[3/7] official standings + opening day...")

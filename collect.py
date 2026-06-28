@@ -258,6 +258,9 @@ def compute_league(games, opening, official):
         return f"{n}{'승' if last == 'W' else '패'}"
 
     ordered = sorted(teams, key=lambda t: (-pct(stats[t]), -stats[t]["w"], t))
+    if not ordered:  # 방어: 경기 0건이면 크래시(IndexError) 대신 빈 리그 반환
+        return {"finals": finals, "standings": [],
+                "rank_history": {"dates": [], "ranks": {}}, "stats": stats}
     leader = stats[ordered[0]]
     standings = []
     for i, t in enumerate(ordered, 1):
@@ -638,7 +641,16 @@ def main():
     with ThreadPoolExecutor(max_workers=8) as ex:
         games = [g for g in ex.map(game_summary, all_ids)
                  if g and g["date"] and g["home"] and g["away"]]
-    print(f"      {len(games)} games, {sum(g['status'] == 'RESULT' for g in games)} finished")
+    finished = sum(g["status"] == "RESULT" for g in games)
+    print(f"      {len(games)} games, {finished} finished")
+
+    # 방어: 데이터소스(네이버) 일시장애로 수집이 통째로 실패하면 game_ids/finished=0.
+    # 이때 크래시하거나 대시보드를 빈 데이터로 덮어쓰지 말고, 기존 산출물을 보존한 채
+    # 정상 종료(exit 0)한다 → "All jobs failed" 헛알림 + IndexError 방지.
+    if not all_ids or finished == 0:
+        print(f"  !! 수집 실패/0건 (game_ids={len(all_ids)}, finished={finished}) "
+              f"— 데이터소스 일시장애로 판단. 기존 대시보드 유지하고 정상 종료.")
+        return
 
     print("[3/7] official standings + opening day...")
     ref_date, official = official_standings(games)
